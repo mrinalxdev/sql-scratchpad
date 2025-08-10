@@ -1,0 +1,249 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>SQL Scratchpad</title>
+  <style>
+    body {
+      font-family: monospace;
+      margin: 0;
+      background-color: #1e1e1e;
+      color: #f5f5f5;
+      display: flex;
+      flex-direction: column;
+      height: 100vh;
+    }
+
+    /* Header */
+    header {
+      background: #252526;
+      padding: 0.8em 1em;
+      font-size: 1.2em;
+      font-weight: bold;
+      border-bottom: 1px solid #3c3c3c;
+    }
+
+    /* Status Bar */
+    #status {
+      padding: 0.5em 1em;
+      font-size: 0.9em;
+    }
+    .connected { color: #4caf50; }
+    .disconnected { color: #f44336; }
+    .connecting { color: #ff9800; }
+
+    /* SQL Input */
+    textarea {
+      width: 100%;
+      height: 8em;
+      background: #1e1e1e;
+      color: #f5f5f5;
+      border: 1px solid #3c3c3c;
+      padding: 0.6em;
+      font-size: 0.95em;
+      resize: vertical;
+    }
+
+    /* Run Button */
+    #run {
+      margin-top: 0.5em;
+      background: #007acc;
+      color: white;
+      border: none;
+      padding: 0.6em 1em;
+      cursor: pointer;
+      font-size: 0.95em;
+      border-radius: 4px;
+    }
+    #run:hover {
+      background: #005f99;
+    }
+
+    /* Output Area */
+    #output {
+      flex: 1;
+      overflow-y: auto;
+      padding: 1em;
+      background: #1e1e1e;
+    }
+
+    /* Query Info */
+    .query {
+      color: #4fc3f7;
+      font-weight: bold;
+      margin-bottom: 0.5em;
+    }
+    .error {
+      color: #f44336;
+    }
+
+    /* Result Box */
+    .result {
+      margin-bottom: 1em;
+      border: 1px solid #3c3c3c;
+      background: #252526;
+      padding: 0.8em;
+      border-radius: 4px;
+    }
+
+    /* Table Styling */
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      margin-top: 0.5em;
+    }
+    th, td {
+      padding: 0.4em;
+      border: 1px solid #3c3c3c;
+      text-align: left;
+    }
+    th {
+      background: #333333;
+      color: #f5f5f5;
+    }
+    td {
+      background: #1e1e1e;
+    }
+
+    /* Collapsible Raw Data */
+    details {
+      margin-top: 0.5em;
+    }
+    pre {
+      background: #1e1e1e;
+      padding: 0.6em;
+      overflow-x: auto;
+      font-size: 0.85em;
+      color: #ccc;
+      border: 1px solid #3c3c3c;
+      border-radius: 4px;
+    }
+  </style>
+</head>
+<body>
+  <header>_READONLY SQL Scratchpad_</header>
+  <div id="status" class="connecting">Connecting...</div>
+  
+  <main style="padding: 1em;">
+    <textarea id="sql" placeholder="SELECT * FROM Artist LIMIT 10;"></textarea>
+    <button id="run">Run Query (Ctrl+Enter)</button>
+  </main>
+  
+  <div id="output"></div>
+
+  <script>
+    let ws;
+    let reconnectAttempts = 0;
+    const maxReconnectAttempts = 5;
+    const reconnectDelay = 1000;
+    
+    const roomId = new URLSearchParams(location.search).get('room') || 'default';
+    const output = document.getElementById('output');
+    const textarea = document.getElementById('sql');
+    const runBtn = document.getElementById('run');
+    const status = document.getElementById('status');
+
+    function updateStatus(text, className) {
+      status.textContent = text;
+      status.className = className;
+    }
+
+    function connect() {
+      const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
+      ws = new WebSocket(`${protocol}//${location.host}?room=${roomId}`);
+      
+      updateStatus('Connecting...', 'connecting');
+
+      ws.onopen = () => {
+        updateStatus('Connected', 'connected');
+        reconnectAttempts = 0;
+      };
+
+      ws.onclose = () => {
+        updateStatus('Disconnected', 'disconnected');
+        if (reconnectAttempts < maxReconnectAttempts) {
+          reconnectAttempts++;
+          updateStatus(`Reconnecting... (${reconnectAttempts}/${maxReconnectAttempts})`, 'connecting');
+          setTimeout(connect, reconnectDelay * reconnectAttempts);
+        }
+      };
+
+      ws.onerror = () => {
+        updateStatus('Connection Error', 'disconnected');
+      };
+
+      ws.onmessage = (e) => {
+        const res = JSON.parse(e.data);
+        
+        const resultDiv = document.createElement('div');
+        resultDiv.className = 'result';
+        
+        if (res.error) {
+          resultDiv.innerHTML = `
+            <div class="query error">Error: ${res.error}</div>
+            <pre>${JSON.stringify(res, null, 2)}</pre>
+          `;
+        } else {
+          let tableHtml = '';
+          if (res.columns && res.rows && res.columns.length > 0) {
+            tableHtml = '<table>';
+            tableHtml += '<thead><tr>';
+            res.columns.forEach(col => {
+              tableHtml += `<th>${col}</th>`;
+            });
+            tableHtml += '</tr></thead><tbody>';
+            res.rows.forEach(row => {
+              tableHtml += '<tr>';
+              row.forEach(cell => {
+                tableHtml += `<td>${cell === null ? 'NULL' : cell}</td>`;
+              });
+              tableHtml += '</tr>';
+            });
+            tableHtml += '</tbody></table>';
+          }
+          
+          resultDiv.innerHTML = `
+            <div class="query">Query ID: ${res.id ? res.id.substring(0,8) + '...' : 'N/A'}</div>
+            <div>Rows: ${res.rowCount || 0} (${res.elapsedMs || 0}ms)</div>
+            ${tableHtml}
+            <details>
+              <summary>Raw Response</summary>
+              <pre>${JSON.stringify(res, null, 2)}</pre>
+            </details>
+          `;
+        }
+        
+        output.appendChild(resultDiv);
+        output.scrollTop = output.scrollHeight;
+      };
+    }
+
+    function runQuery() {
+      const sql = textarea.value.trim();
+      if (!sql) return;
+      
+      if (ws && ws.readyState === WebSocket.OPEN) {
+        const id = crypto.randomUUID();
+        ws.send(JSON.stringify({ id, sql }));
+        
+        const queryDiv = document.createElement('div');
+        queryDiv.className = 'query';
+        queryDiv.textContent = `> ${sql}`;
+        output.appendChild(queryDiv);
+        output.scrollTop = output.scrollHeight;
+      } else {
+        alert('Not connected to server.');
+      }
+    }
+
+    runBtn.onclick = runQuery;
+    textarea.addEventListener('keydown', (e) => {
+      if (e.ctrlKey && e.key === 'Enter') {
+        runQuery();
+      }
+    });
+
+    connect();
+  </script>
+</body>
+</html>
