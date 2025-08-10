@@ -19,7 +19,6 @@ const server = serve({
         return new Response("Room mismatch", { status: 400 });
       }
 
-      // Bun's built-in WebSocket upgrade
       if (server.upgrade) {
         return server.upgrade(req, {
           data: {
@@ -30,6 +29,15 @@ const server = serve({
 
       return new Response("Upgrade failed", { status: 400 });
     }
+
+    // Serve static files
+    if (url.pathname === '/app.js') {
+      return new Response(Bun.file("./public/app.js"));
+    }
+    if (url.pathname === '/styles.css') {
+      return new Response(Bun.file("./public/styles.css"));
+    }
+    
     return new Response(Bun.file("./public/index.html"));
   },
 
@@ -43,35 +51,6 @@ const server = serve({
       clients.delete(ws);
       console.log("Client disconnected");
     },
-
-    // message(ws, message) {
-    //   let data;
-    //   try {
-    //     data = JSON.parse(message.toString());
-    //   } catch {
-    //     ws.send(JSON.stringify({ error: 'Invalid JSON' }));
-    //     return;
-    //   }
-
-    //   const { id, sql } = data;
-
-    //   if (!id || !sql || typeof sql !== 'string') {
-    //     ws.send(JSON.stringify({ error: 'Missing id or sql' }));
-    //     return;
-    //   }
-
-    //   console.log('Running query:', sql);
-
-    //   runQuery(sql, MAX_ROWS, TIMEOUT_MS).then(result => {
-    //     const payload = { id, ...result };
-    //     const msg = JSON.stringify(payload);
-
-    //     // Broadcast to all clients
-    //     for (const client of clients) {
-    //       client.send(msg);
-    //     }
-    //   });
-    // }
 
     message(ws, message) {
       let data;
@@ -92,10 +71,9 @@ const server = serve({
       console.log("Running query:", sql);
 
       runQuery(sql, MAX_ROWS, TIMEOUT_MS).then((result) => {
-        const payload = { id, sql, ...result }; // Add sql to payload
+        const payload = { id, sql, ...result };
         const msg = JSON.stringify(payload);
 
-        // Broadcast to all clients
         for (const client of clients) {
           client.send(msg);
         }
